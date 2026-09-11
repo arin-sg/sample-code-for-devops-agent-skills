@@ -178,12 +178,12 @@ The associated region determines which TGW/DXGW considers the DX "local" for LP 
 | Official AWS service | Yes | No |
 | SLA | Yes | No |
 | AWS Support coverage | Yes | No (handled by Global Interconnect Strategy team) |
-| Internal LOCAL_PREF | 3000 | 2500 |
+| Internal LOCAL_PREF | Higher | Lower |
 | Path preference | **Preferred** (higher LP) | Lower priority |
 
 ### Important Guidance
 
-- If the **same prefix** is received by AWS over both DX Public VIF and Peering (PNI, IXP, or Transit), **DX Public VIF is the preferred path** (LOCAL_PREF 3000 > 2500)
+- If the **same prefix** is received by AWS over both DX Public VIF and Peering (PNI, IXP, or Transit), **DX Public VIF is the preferred path** (higher internal LOCAL_PREF)
 - Public Peering / PNI is NOT an official AWS service — no SLA, no support expectation from the technical field
 - **Steer customers toward DX** when they need reliability and support coverage
 - There is no expectation for the technical field to support Public Peering / PNI engagements

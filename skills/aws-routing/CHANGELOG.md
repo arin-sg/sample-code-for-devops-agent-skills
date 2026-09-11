@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.2.2] - 2026-09-10
+### Changed
+- `references/tgw-routing-patterns.md`: clarified that the VPN-preferred-over-DX behavior applies specifically to a **static** VPN (dynamic VPN behaves differently).
+- `references/dx-routing-patterns.md`: replaced the specific internal LOCAL_PREF values (3000/2500) with generic "Higher"/"Lower", since the exact values are internal and not publicly documented; the DX-over-peering preference is still stated.
+
 ## [1.2.1] - 2026-09-10
 ### Changed
 - `references/cloudwan-dx-routing-patterns.md`: added the "every route table does its own independent lookup" mental model and the DXGW-then-CNE two-lookup framing; corrected the AS-path prepending pitfall (local-region LP is evaluated before AS-path at the DXGW, so prepending a local VIF is not a cross-region steering lever — it only breaks the LP-equal tiebreak among remote advertisements); added a worked per-region example and remapped directional control and cleanup guidance to the two lookups.

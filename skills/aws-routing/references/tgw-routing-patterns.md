@@ -18,7 +18,7 @@ This document captures key routing mechanics, ECMP behavior, failover characteri
 
 - Static VPN routes have a **higher routing priority** at the TGW than Direct Connect routes
 - Always refer to the TGW Route evaluation order when determining which attachment path will win for a given prefix
-- This can cause unexpected behavior if a customer has both VPN and DX advertising the same prefix — the static VPN will be preferred
+- This can cause unexpected behavior if a customer has both a static VPN and DX advertising the same prefix — the static VPN will be preferred
 
 ## ECMP Behavior
 
