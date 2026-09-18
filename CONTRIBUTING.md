@@ -58,6 +58,7 @@ This is the full shape the tool produces:
 ```
 skills/<name>/evals/
 ├── evals.json                                        # YOU write this: eval definitions for the skill
+├── exemptions.json                                   # optional, see "When a test type can't be run"
 ├── structure/
 │   └── structure-tests-results-v<N>.json             # one file per run
 ├── best-practices/
@@ -126,6 +127,26 @@ python3 .github/scripts/validate_skill_evals.py --skill <your-skill-name>
 ```
 
 A failing check also puts a `needs-evals` label on the PR, which is removed automatically once the check passes.
+
+##### When a test type can't be run
+
+Some skills genuinely can't produce results for one of the test types. The two common cases are limitations in accessing the skill evaluation tool, and skills the tool can't fully evaluate yet — its functional tests don't support every DevOps Agent agent type. For those, commit an `evals/exemptions.json` naming the test type and why:
+
+```json
+{
+  "functional": {
+    "reason": "Functional test results could not be produced due to limitations in accessing the skill evaluation tool. Structure and best-practices results in this directory were produced by a maintainer on the author's behalf, and manual with-skill / without-skill DevOps Agent output is attached to the pull request."
+  }
+}
+```
+
+The exempted test type is then not checked. It's reported as a warning instead, so the check goes green while still showing what's missing and why. Keys are `structure`, `best-practices`, and `functional`; `evals.json` is hand-written rather than tool output, so it can't be exempted.
+
+Write a reason that explains the blocker and what *was* run — a future maintainer needs to know whether to revisit it. If the exemption is temporary, such as an agent type the tool will support later, say so, so it gets removed when the limitation goes away.
+
+An exemption excuses the tool's results, not the testing itself. Still test the skill manually as described above, and include the evidence in the pull request — DevOps Agent output with and without the skill, across a few iterations — so a maintainer can judge whether the skill actually works. An exemption with no supporting evidence gives a reviewer nothing to go on.
+
+The file fails closed: invalid JSON, an unknown test type, or a missing or empty `reason` grants no exemption and is reported as a problem in its own right, so a typo can't silently waive a requirement. Because the file is part of the PR, granting an exemption goes through normal review like any other change — don't add one without agreement from a maintainer.
 
 Everything below that depth is left unchecked, so `outputs/`, `_metadata.json`, `cli_debug/`, `sdk_debug/`, iteration counts, and scenario names are all free to vary, as are any extra files.
 

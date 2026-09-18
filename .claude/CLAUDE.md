@@ -115,6 +115,7 @@ The only hand-written file under `evals/` is the top-level `evals.json` (the ski
 ```
 skills/<name>/evals/
 ├── evals.json                                        # hand-written: eval definitions
+├── exemptions.json                                   # hand-written, optional: test-type exemptions
 ├── structure/
 │   └── structure-tests-results-v<N>.json             # one file per run
 ├── best-practices/
@@ -142,6 +143,7 @@ skills/<name>/evals/
 - Only the last version of each test type belongs in git. The tool retains every run locally, which can reach tens of thousands of files and over a GB for a single skill
 - `.github/workflows/validate-skill-evals.yml` (via `.github/scripts/validate_skill_evals.py`) checks, for each skill a PR touches: `evals/evals.json`; at least one `evals/structure/structure-tests-results-v<N>.json`; at least one complete `evals/best-practices/v<N>/` (`benchmark.json` + an `iteration-<n>/best-practices-tests-results.json`); and at least one complete `evals/functional/v<N>/` (`benchmark.json`, `evals.json`, and one `iteration-<n>/<scenario>/` holding both `with_skill/` and `without_skill/functional-tests-results.json`). Iteration numbers and scenario names are wildcards; the with/without pair must come from the same scenario directory
 - Validation stops at that depth on purpose. `outputs/*`, `_metadata.json`, iteration counts, and scenario names vary by run and tool version and are deliberately unchecked — don't tighten them without re-checking recent runs of the eval tool first
+- A skill that genuinely cannot produce one test type's results can commit `evals/exemptions.json` — `{"<test type>": {"reason": "..."}}`, keys `structure` / `best-practices` / `functional`. That type is then not checked but reported as a warning, so the check passes while staying visible. `evals.json` is never exemptable. The parser fails closed (bad JSON, unknown type, or empty `reason` grants nothing and is reported), and because the file is in the PR diff, exemptions go through normal review. Typical uses: limitations in accessing the skill evaluation tool, or an agent type its functional tests don't support yet. An exemption excuses the tool's results, not the testing — the PR should still carry manual with-skill / without-skill evidence for a maintainer to judge
 - Contributors can run the check locally: `python3 .github/scripts/validate_skill_evals.py --skill <skill-name>`
 - "At least one complete" version means an aborted run committed next to a good one is harmless, while a lone aborted run (e.g. one that never wrote `benchmark.json`) fails the check
 - Enforcement is gradual, and every case is decided by the skill's state **on the base branch**: absent there (added by the PR) → enforced; present and already carrying `evals/structure|best-practices|functional` → enforced; present and still on the old flat `evals/` → warnings only. Computed from the merge base, so a skill promotes itself to enforced as soon as its migration lands — nothing to maintain by hand

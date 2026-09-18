@@ -57,12 +57,31 @@ the base branch, so the split needs no maintenance as the backlog shrinks.
 that migration — every PR touching a legacy skill becomes a blocker — rather than
 a cleanup step to apply after the fact, when it would be a no-op.
 
-Exit code is 0 when no enforced skill has violations, 1 otherwise.
+A skill can be exempted from a test type it genuinely cannot produce results for,
+by committing ``evals/exemptions.json``::
+
+    {
+      "functional": {
+        "reason": "why these results cannot be produced"
+      }
+    }
+
+An exempted test type is not checked; it is reported as a warning instead, so a
+green check still shows what is missing and why. ``evals.json`` is hand-written
+rather than tool output, so it is never exemptable. The file fails closed: bad
+JSON, an unknown test type, or a missing/empty ``reason`` grants no exemption and
+is itself reported, so a typo cannot silently waive a requirement. Because the
+file lives in the PR diff, granting an exemption goes through the same review as
+any other change.
+
+Exit code is 0 when no enforced skill has violations, 1 otherwise. Exemptions
+never affect the exit code.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -78,6 +97,11 @@ VERSION_DIR_RE = re.compile(r"^v\d+$")
 # the new layout, so it is held to it from then on.
 MIGRATED_MARKERS = ("evals/structure", "evals/best-practices", "evals/functional")
 
+# Test types whose results a skill can be exempted from, via evals/exemptions.json.
+# ``evals.json`` is hand-written and always required, so it is not exemptable.
+EXEMPTABLE_TYPES = ("structure", "best-practices", "functional")
+EXEMPTIONS_FILENAME = "exemptions.json"
+
 DOCS_HINT = (
     'See the "Eval Results Layout" section of CONTRIBUTING.md for the expected '
     "evals/ layout."
@@ -89,6 +113,11 @@ class SkillReport:
     id: str
     enforced: bool
     violations: list[str] = field(default_factory=list)
+    # Granted exemptions, surfaced as warnings so they stay visible on a green
+    # check rather than disappearing. Kept out of ``violations`` so they are never
+    # counted as failures themselves; the exempted requirement is simply not
+    # checked, which is what lets an otherwise-failing skill exit 0.
+    exemptions: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -238,38 +267,95 @@ def _check_versioned_type(
     ]
 
 
-def validate_skill(repo_root: Path, skill_id: str) -> list[str]:
-    """Return the list of evals-layout violations for one skill (empty == valid)."""
+def read_exemptions(evals: Path, rel_evals: str) -> tuple[dict[str, str], list[str]]:
+    """Parse ``evals/exemptions.json``, returning ({test type: reason}, problems).
+
+    Anything wrong with the file — bad JSON, an unknown test type, a missing or
+    empty reason — is reported as a problem and grants no exemption. Failing
+    closed matters here: a typo must not silently waive a requirement.
+    """
+    path = evals / EXEMPTIONS_FILENAME
+    rel = f"{rel_evals}/{EXEMPTIONS_FILENAME}"
+    if not path.is_file():
+        return {}, []
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return {}, [f"`{rel}` is not valid JSON ({exc.__class__.__name__}: {exc})"]
+
+    if not isinstance(raw, dict):
+        return {}, [f"`{rel}` must be a JSON object keyed by test type"]
+
+    exemptions: dict[str, str] = {}
+    problems: list[str] = []
+    for test_type, body in raw.items():
+        if test_type not in EXEMPTABLE_TYPES:
+            problems.append(
+                f"`{rel}` has unknown test type `{test_type}` "
+                f"(expected one of: {', '.join(EXEMPTABLE_TYPES)})"
+            )
+            continue
+        reason = body.get("reason") if isinstance(body, dict) else None
+        if not isinstance(reason, str) or not reason.strip():
+            problems.append(
+                f"`{rel}` entry `{test_type}` needs a non-empty `reason` explaining "
+                "why the results cannot be produced"
+            )
+            continue
+        exemptions[test_type] = reason.strip()
+
+    return exemptions, problems
+
+
+def validate_skill(repo_root: Path, skill_id: str) -> tuple[list[str], list[str]]:
+    """Validate one skill, returning (violations, granted exemptions).
+
+    An exempted test type is not checked at all; instead it is reported as a
+    warning, so a green check still shows which results are missing and why.
+    """
     skill_path = repo_root / "skills" / skill_id
     evals = skill_path / "evals"
     rel_evals = f"skills/{skill_id}/evals"
 
     if not evals.is_dir():
-        return [f"missing directory `{rel_evals}/`"]
+        return [f"missing directory `{rel_evals}/`"], []
 
-    violations: list[str] = []
+    exemptions, violations = read_exemptions(evals, rel_evals)
 
+    # Never exemptable: evals.json is hand-written, not tool output.
     if not (evals / "evals.json").is_file():
         violations.append(f"missing file `{rel_evals}/evals.json`")
 
-    structure = evals / "structure"
-    if not structure.is_dir():
-        violations.append(f"missing directory `{rel_evals}/structure/`")
-    elif not any(
-        p.is_file() and STRUCTURE_RESULT_RE.match(p.name) for p in structure.iterdir()
-    ):
-        violations.append(
-            f"`{rel_evals}/structure/` has no `structure-tests-results-v<number>.json` file"
+    if "structure" not in exemptions:
+        structure = evals / "structure"
+        if not structure.is_dir():
+            violations.append(f"missing directory `{rel_evals}/structure/`")
+        elif not any(
+            p.is_file() and STRUCTURE_RESULT_RE.match(p.name)
+            for p in structure.iterdir()
+        ):
+            violations.append(
+                f"`{rel_evals}/structure/` has no "
+                "`structure-tests-results-v<number>.json` file"
+            )
+
+    if "best-practices" not in exemptions:
+        violations += _check_versioned_type(
+            skill_id, evals, "best-practices", _missing_in_best_practices_version
         )
 
-    violations += _check_versioned_type(
-        skill_id, evals, "best-practices", _missing_in_best_practices_version
-    )
-    violations += _check_versioned_type(
-        skill_id, evals, "functional", _missing_in_functional_version
-    )
+    if "functional" not in exemptions:
+        violations += _check_versioned_type(
+            skill_id, evals, "functional", _missing_in_functional_version
+        )
 
-    return violations
+    granted = [
+        f"`{test_type}` results exempted — {exemptions[test_type]}"
+        for test_type in EXEMPTABLE_TYPES
+        if test_type in exemptions
+    ]
+    return violations, granted
 
 
 def build_reports(
@@ -284,11 +370,13 @@ def build_reports(
             for marker in MIGRATED_MARKERS
         )
         enforced = enforce_all or is_new or was_migrated
+        violations, exemptions = validate_skill(repo_root, skill_id)
         reports.append(
             SkillReport(
                 id=skill_id,
                 enforced=enforced,
-                violations=validate_skill(repo_root, skill_id),
+                violations=violations,
+                exemptions=exemptions,
             )
         )
     return reports
@@ -305,12 +393,15 @@ def _annotate(report: SkillReport) -> None:
     """
     if not os.environ.get("GITHUB_ACTIONS"):
         return
+    title = f"Skill evals layout: {report.id}"
     level = "error" if report.enforced else "warning"
     for violation in report.violations:
-        title = f"Skill evals layout: {report.id}"
         # Annotations are single-line; strip any embedded newlines.
         message = violation.replace("\n", " ")
         print(f"::{level} title={title}::{message} — {DOCS_HINT}")
+    # Exemptions are always warnings, never errors, even on an enforced skill.
+    for exemption in report.exemptions:
+        print(f"::warning title={title}::{exemption.replace(chr(10), ' ')}")
 
 
 def _write_summary(reports: list[SkillReport], failed: list[SkillReport]) -> None:
@@ -322,8 +413,8 @@ def _write_summary(reports: list[SkillReport], failed: list[SkillReport]) -> Non
     if not reports:
         lines.append("No skill directories touched by this PR. Nothing to check.")
     else:
-        lines.append("| Skill | Mode | Result |")
-        lines.append("| --- | --- | --- |")
+        lines.append("| Skill | Mode | Result | Exemptions |")
+        lines.append("| --- | --- | --- | --- |")
         for r in reports:
             mode = "enforced" if r.enforced else "legacy (warn only)"
             if r.ok:
@@ -332,15 +423,19 @@ def _write_summary(reports: list[SkillReport], failed: list[SkillReport]) -> Non
                 result = f"**fail** — {len(r.violations)} issue(s)"
             else:
                 result = f"warn — {len(r.violations)} issue(s)"
-            lines.append(f"| `{r.id}` | {mode} | {result} |")
+            exempt = str(len(r.exemptions)) if r.exemptions else "—"
+            lines.append(f"| `{r.id}` | {mode} | {result} | {exempt} |")
         lines.append("")
         for r in reports:
-            if r.ok:
-                continue
-            heading = "Failures" if r.enforced else "Warnings"
-            lines.append(f"### `{r.id}` — {heading}")
-            lines += [f"- {v}" for v in r.violations]
-            lines.append("")
+            if r.violations:
+                heading = "Failures" if r.enforced else "Warnings"
+                lines.append(f"### `{r.id}` — {heading}")
+                lines += [f"- {v}" for v in r.violations]
+                lines.append("")
+            if r.exemptions:
+                lines.append(f"### `{r.id}` — Exemptions granted")
+                lines += [f"- {e}" for e in r.exemptions]
+                lines.append("")
         if failed:
             lines.append(DOCS_HINT)
 
@@ -384,10 +479,17 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = _repo_root()
 
     if args.skill:
-        reports = [
-            SkillReport(id=s, enforced=True, violations=validate_skill(repo_root, s))
-            for s in sorted(set(args.skill))
-        ]
+        reports = []
+        for s in sorted(set(args.skill)):
+            violations, exemptions = validate_skill(repo_root, s)
+            reports.append(
+                SkillReport(
+                    id=s,
+                    enforced=True,
+                    violations=violations,
+                    exemptions=exemptions,
+                )
+            )
     else:
         base = _diff_base(repo_root, args.base_ref, args.head_ref)
         skill_ids = changed_skill_ids(repo_root, base, args.head_ref)
@@ -410,6 +512,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{label}  {r.id} ({mode})")
             for v in r.violations:
                 print(f"        - {v}")
+        for e in r.exemptions:
+            print(f"        ! {e}")
         _annotate(r)
 
     _write_summary(reports, failed)
