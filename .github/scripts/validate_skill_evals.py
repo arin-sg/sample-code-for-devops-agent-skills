@@ -41,11 +41,14 @@ only ``journal_records.json`` is committed. See CONTRIBUTING.md.
 Rollout is gradual, so a skill's *mode* decides whether a violation fails the
 build or is only reported:
 
-  * **enforced** — the skill directory does not exist at the base ref (a skill
-    added by this PR), or it already carries the new layout at the base ref (so a
-    migrated skill cannot regress). Violations exit non-zero.
-  * **legacy** — a pre-existing skill still on the old flat ``evals/`` layout.
-    Violations are reported as warnings only, until it is migrated.
+  * **enforced** — any of: the skill directory does not exist at the base ref (a
+    skill the PR adds); it already carries the new layout at the base ref (so a
+    migrated skill cannot regress); or the PR itself introduces the new layout
+    (so a migration cannot land half-finished and fail the next person to touch
+    the skill). Violations exit non-zero.
+  * **legacy** — a pre-existing skill still on the old flat ``evals/`` layout,
+    which this PR also leaves on that layout. Violations are reported as warnings
+    only, until it is migrated.
 
 Only skills whose files the PR touches are inspected. Skill directories deleted
 by the PR, and paths under ``skills/`` that are not skill directories (such as
@@ -369,7 +372,15 @@ def build_reports(
             _exists_at_ref(repo_root, base, f"{rel_dir}/{marker}")
             for marker in MIGRATED_MARKERS
         )
-        enforced = enforce_all or is_new or was_migrated
+        # Also enforce when the PR *itself* introduces the new layout, so a
+        # migration cannot land half-finished. Without this, a PR adding only
+        # evals/structure/ to a legacy skill would warn and merge, and the next
+        # PR touching that skill — possibly by someone else, for an unrelated
+        # reason — would fail on the two directories it never touched.
+        now_migrated = any(
+            (repo_root / rel_dir / marker).exists() for marker in MIGRATED_MARKERS
+        )
+        enforced = enforce_all or is_new or was_migrated or now_migrated
         violations, exemptions = validate_skill(repo_root, skill_id)
         reports.append(
             SkillReport(

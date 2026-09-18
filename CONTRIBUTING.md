@@ -150,15 +150,16 @@ The file fails closed: invalid JSON, an unknown test type, or a missing or empty
 
 Everything below that depth is left unchecked, so `outputs/`, `_metadata.json`, `cli_debug/`, `sdk_debug/`, iteration counts, and scenario names are all free to vary, as are any extra files.
 
-The check is rolling out gradually, and a skill's state **on `main`** decides whether a violation fails the check or is only reported:
+The check is rolling out gradually, so whether a violation fails the check or is only reported depends on the skill:
 
-| Skill's state on `main` | Behavior |
+| Skill | Behavior |
 | --- | --- |
-| Doesn't exist yet — your PR adds it | Must satisfy the four requirements, or the check fails |
-| Exists and already migrated to this layout | Must keep satisfying them, or the check fails |
-| Exists and still on the older flat `evals/` layout | Reported as a warning; the check passes |
+| Doesn't exist on `main` yet — your PR adds it | Must satisfy the four requirements, or the check fails |
+| Exists on `main` and already has this layout | Must keep satisfying them, or the check fails |
+| Exists on `main` on the older flat `evals/` layout, and your PR **starts** moving it to this one | Must satisfy them, or the check fails — a migration has to be complete, not partial |
+| Exists on `main` on the older flat `evals/` layout, and your PR leaves it there | Reported as a warning; the check passes |
 
-So new skills need eval results, and existing skills are only held to that once they've been migrated — a skill moves from the third row to the second the moment its migration lands on `main`, automatically. If a warning names a skill you're working on, migrating it is welcome in the same PR.
+So new skills need eval results, and existing skills are only held to that once someone migrates them. Migrating one is welcome in any PR — but finish it, or use an exemption for the part you can't produce. Landing half a migration and leaving the rest would fail the next person to touch that skill, for something they didn't do, which is why the third row exists.
 
 #### Keeping a Skill Fresh
 
