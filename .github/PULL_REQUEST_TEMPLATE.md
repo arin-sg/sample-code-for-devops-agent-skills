@@ -26,6 +26,13 @@ only control on it. Check that the `reason` names a real blocker, that the PR
 carries manual with-skill / without-skill DevOps Agent output in place of the
 missing results, and that nothing is exempted that could simply have been run.
 See the "When a test type can't be run" section in CONTRIBUTING.md.
+
+Also: pull requests that were already open when the eval-results check was
+introduced are listed in the script by number, so the check passes with warnings
+instead of failing. If this is one of them and the skill should ship results after all,
+add the `enforce-evals` label — the check re-runs with every touched skill
+enforced, and the label stays put on later pushes. See "Pull requests opened
+before this check existed" in CONTRIBUTING.md.
 -->
 
 ## License confirmation

@@ -3,6 +3,13 @@ name: Label skill evals result
 # Applies the `needs-evals` label to a PR whose "Validate skill evals" check
 # failed, and removes it once the check passes.
 #
+# `needs-evals` is an *output* of the check and is owned by this workflow alone. It
+# is not the same label as `enforce-evals`, which is an input a maintainer applies
+# to make the check strict for one PR. The two cannot be merged into one: this
+# workflow clears its label as soon as the check passes, which would discard the
+# enforcement decision and let the next push delete the results again and go green.
+# Nothing here reads or writes `enforce-evals`.
+#
 # Why a separate workflow: for pull_request events from a fork, GITHUB_TOKEN is
 # read-only regardless of the `permissions:` block, so the validating job cannot
 # label its own PR — and most contributions to this repo come from forks. A

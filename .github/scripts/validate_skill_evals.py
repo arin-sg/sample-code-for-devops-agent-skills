@@ -50,15 +50,28 @@ build or is only reported:
     which this PR also leaves on that layout. Violations are reported as warnings
     only, until it is migrated.
 
+Two things can override that per pull request, checked in this order:
+
+  1. the ``enforce-evals`` label — every skill the PR touches is enforced,
+     whatever its mode would otherwise be. A maintainer-only, per-PR form of
+     ``--strict``.
+  2. ``PRS_PREDATING_CHECK`` — pull requests already open when this check was
+     introduced. Every skill they touch is legacy, including a skill the PR adds.
+     This waives *producing* results only: a skill that already carries results at
+     the base ref, or that the PR itself partly migrates, stays enforced.
+
+Without either, the mode is derived as described above and nothing changes.
+
 Only skills whose files the PR touches are inspected. Skill directories deleted
 by the PR, and paths under ``skills/`` that are not skill directories (such as
 ``skills/.gitignore``), are skipped.
 
 A skill promotes itself from legacy to enforced as soon as its migration lands on
 the base branch, so the split needs no maintenance as the backlog shrinks.
-``--strict`` enforces on unmigrated skills too, which is a lever for *forcing*
-that migration — every PR touching a legacy skill becomes a blocker — rather than
-a cleanup step to apply after the fact, when it would be a no-op.
+``--strict`` enforces on unmigrated legacy skills too, repo-wide, which is a lever
+for *forcing* that migration — every PR touching a legacy skill becomes a blocker
+— rather than a cleanup step to apply after the fact, when it would be a no-op. It
+also overrides ``PRS_PREDATING_CHECK``.
 
 A skill can be exempted from a test type it genuinely cannot produce results for,
 by committing ``evals/exemptions.json``::
@@ -100,6 +113,35 @@ VERSION_DIR_RE = re.compile(r"^v\d+$")
 # the new layout, so it is held to it from then on.
 MIGRATED_MARKERS = ("evals/structure", "evals/best-practices", "evals/functional")
 
+# Pull requests that were already open when this check was introduced, and that
+# touch a skill directory. Their authors tested their skills against the rules that
+# existed when they contributed, so every skill these PRs touch is treated as
+# legacy — a skill the PR *adds* included, which is what matters in practice, since
+# all of these PRs contribute new skills.
+#
+# This does not let them through unconditionally: a maintainer opts an individual
+# PR back into enforcement with the ``ENFORCE_LABEL``, checked first. The list on its
+# own was considered too open: it would waive the requirement for whatever these
+# PRs end up containing, and the only way back would be another change to this
+# script.
+#
+# The list is finite and stops mattering as these PRs close; a number that is no
+# longer open is simply never matched. Delete the list and ``--pr-number`` once all
+# of them are closed. Derived on 2026-09-19 from the open PRs touching skills/.
+PRS_PREDATING_CHECK = frozenset(
+    {20, 25, 26, 38, 42, 54, 56, 58, 62, 67, 71, 72, 77, 78, 81, 85, 89, 90, 91, 93}
+)
+
+# Label that forces enforcement on every skill a pull request touches, whatever the
+# derived mode. Deliberately *not* the `needs-evals` label the companion labeling
+# workflow manages: that one is removed as soon as the check passes, so reusing it
+# would discard the decision at exactly the wrong moment — the next push could then
+# delete the results again and go green. This label is never written by automation.
+#
+# Adding or removing a label requires triage or write access to this repository, so
+# a contributor cannot clear it to unblock their own pull request.
+ENFORCE_LABEL = "enforce-evals"
+
 # Test types whose results a skill can be exempted from, via evals/exemptions.json.
 # ``evals.json`` is hand-written and always required, so it is not exemptable.
 EXEMPTABLE_TYPES = ("structure", "best-practices", "functional")
@@ -110,11 +152,25 @@ DOCS_HINT = (
     "evals/ layout."
 )
 
+# Printed when a pull request predating the check has violations, so a maintainer
+# reading a green check can see what was let through and how to require it instead.
+PREDATES_CHECK_HINT = (
+    "The skill(s) above were reported as warnings because this pull request was "
+    "already open when the eval results check was introduced. To require the "
+    f"results anyway, apply the `{ENFORCE_LABEL}` label to this pull request; that "
+    "re-runs the check with every touched skill enforced."
+)
+
 
 @dataclass
 class SkillReport:
     id: str
     enforced: bool
+    # Why the mode was overridden, when it was ("predates check", or the name of the
+    # thing that forced enforcement). Empty when the mode was derived normally.
+    # Reported so a green check still shows that a skill was let through, and a red
+    # one shows what made it strict.
+    mode_note: str = ""
     violations: list[str] = field(default_factory=list)
     # Granted exemptions, surfaced as warnings so they stay visible on a green
     # check rather than disappearing. Kept out of ``violations`` so they are never
@@ -125,6 +181,12 @@ class SkillReport:
     @property
     def ok(self) -> bool:
         return not self.violations
+
+    @property
+    def mode(self) -> str:
+        """Human-readable mode, including why it was overridden."""
+        base = "enforced" if self.enforced else "legacy"
+        return f"{base} ({self.mode_note})" if self.mode_note else base
 
 
 def _repo_root() -> Path:
@@ -362,8 +424,19 @@ def validate_skill(repo_root: Path, skill_id: str) -> tuple[list[str], list[str]
 
 
 def build_reports(
-    repo_root: Path, skill_ids: list[str], base: str, enforce_all: bool
+    repo_root: Path,
+    skill_ids: list[str],
+    base: str,
+    force_reason: str | None = None,
+    predates_check: bool = False,
 ) -> list[SkillReport]:
+    """Validate each touched skill and resolve its mode.
+
+    ``force_reason`` names whatever is forcing enforcement (``--strict`` or the
+    label) and is reported as-is; ``predates_check`` marks the pull request as one
+    opened before this check existed. Precedence is force, then predates, then
+    derived.
+    """
     reports: list[SkillReport] = []
     for skill_id in skill_ids:
         rel_dir = f"skills/{skill_id}"
@@ -380,17 +453,71 @@ def build_reports(
         now_migrated = any(
             (repo_root / rel_dir / marker).exists() for marker in MIGRATED_MARKERS
         )
-        enforced = enforce_all or is_new or was_migrated or now_migrated
+
+        # Precedence: an explicit force wins, then a PR predating the check, then
+        # the mode derived from the skill itself.
+        #
+        # Both migration conditions survive the predating-PR case, which only waives
+        # producing results that were never asked for:
+        #
+        #  * ``was_migrated`` — predating the check does not license deleting results
+        #    already on the base branch, so the anti-regression ratchet still holds.
+        #    Unreachable today, since no skill on the base branch carries results
+        #    yet, but a long-lived PR rebased onto a migrated skill could hit it.
+        #  * ``now_migrated`` — a PR that ships *part* of the new layout still has to
+        #    finish it (or exempt the rest). Otherwise the half migration lands, and
+        #    the next person to touch that skill inherits a failure on directories
+        #    they never touched — the trap ``now_migrated`` exists to prevent, which
+        #    a PR predating the check would otherwise spring. None of the PRs in
+        #    ``PRS_PREDATING_CHECK`` ships any of the marker directories, so this
+        #    costs them nothing.
+        if force_reason:
+            enforced, mode_note = True, force_reason
+        elif predates_check and not (was_migrated or now_migrated):
+            enforced, mode_note = False, "predates check"
+        else:
+            enforced, mode_note = (is_new or was_migrated or now_migrated), ""
+
         violations, exemptions = validate_skill(repo_root, skill_id)
         reports.append(
             SkillReport(
                 id=skill_id,
                 enforced=enforced,
+                mode_note=mode_note,
                 violations=violations,
                 exemptions=exemptions,
             )
         )
     return reports
+
+
+def parse_label_names(raw: str) -> list[str]:
+    """Label names from a JSON array, as produced by ``toJSON(...labels.*.name)``.
+
+    Anything unparseable is reported and treated as "no labels". That direction is
+    deliberate: the only label this script reads *adds* enforcement, so a mangled
+    value can never waive a requirement — at worst a maintainer sees the label they
+    applied did not take effect, with the reason in the log.
+    """
+    if not raw.strip():
+        return []
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        print(
+            f"warning: --labels is not valid JSON ({exc}); treating the pull "
+            "request as unlabeled",
+            file=sys.stderr,
+        )
+        return []
+    if not isinstance(data, list):
+        print(
+            "warning: --labels must be a JSON array of label names; treating the "
+            "pull request as unlabeled",
+            file=sys.stderr,
+        )
+        return []
+    return [name for name in data if isinstance(name, str)]
 
 
 def _annotate(report: SkillReport) -> None:
@@ -427,7 +554,7 @@ def _write_summary(reports: list[SkillReport], failed: list[SkillReport]) -> Non
         lines.append("| Skill | Mode | Result | Exemptions |")
         lines.append("| --- | --- | --- | --- |")
         for r in reports:
-            mode = "enforced" if r.enforced else "legacy (warn only)"
+            mode = r.mode if r.enforced else f"{r.mode} — warn only"
             if r.ok:
                 result = "pass"
             elif r.enforced:
@@ -449,6 +576,8 @@ def _write_summary(reports: list[SkillReport], failed: list[SkillReport]) -> Non
                 lines.append("")
         if failed:
             lines.append(DOCS_HINT)
+        if any(r.mode_note == "predates check" and not r.ok for r in reports):
+            lines += ["", PREDATES_CHECK_HINT]
 
     with open(summary_path, "a", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -482,12 +611,42 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Fail on unmigrated legacy skills too, instead of only warning. Use it "
             "to force migration: every PR touching a legacy skill becomes a "
-            "blocker. Once all skills are migrated this flag has no effect."
+            "blocker. Once all skills are migrated this flag has no effect. Also "
+            "overrides the list of pull requests predating the check."
+        ),
+    )
+    parser.add_argument(
+        "--pr-number",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Number of the pull request being checked, matched against "
+            "PRS_PREDATING_CHECK. Omitted locally, where no PR is involved."
+        ),
+    )
+    parser.add_argument(
+        "--labels",
+        default="",
+        metavar="JSON",
+        help=(
+            "The pull request's label names as a JSON array. The "
+            f"`{ENFORCE_LABEL}` label forces enforcement on every skill the PR "
+            "touches."
         ),
     )
     args = parser.parse_args(argv)
 
     repo_root = _repo_root()
+
+    # Precedence between these two is resolved in build_reports: force wins.
+    if args.strict:
+        force_reason = "--strict"
+    elif ENFORCE_LABEL in parse_label_names(args.labels):
+        force_reason = f"{ENFORCE_LABEL} label"
+    else:
+        force_reason = None
+    predates_check = args.pr_number in PRS_PREDATING_CHECK
 
     if args.skill:
         reports = []
@@ -497,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
                 SkillReport(
                     id=s,
                     enforced=True,
+                    mode_note="--skill",
                     violations=violations,
                     exemptions=exemptions,
                 )
@@ -504,7 +664,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         base = _diff_base(repo_root, args.base_ref, args.head_ref)
         skill_ids = changed_skill_ids(repo_root, base, args.head_ref)
-        reports = build_reports(repo_root, skill_ids, base, args.strict)
+        reports = build_reports(
+            repo_root, skill_ids, base, force_reason, predates_check
+        )
 
     if not reports:
         print("No skill directories touched by this PR; evals layout check skipped.")
@@ -515,12 +677,11 @@ def main(argv: list[str] | None = None) -> int:
     warned = [r for r in reports if not r.enforced and not r.ok]
 
     for r in reports:
-        mode = "enforced" if r.enforced else "legacy"
         if r.ok:
-            print(f"PASS  {r.id} ({mode})")
+            print(f"PASS  {r.id} ({r.mode})")
         else:
-            label = "FAIL" if r.enforced else "WARN"
-            print(f"{label}  {r.id} ({mode})")
+            outcome = "FAIL" if r.enforced else "WARN"
+            print(f"{outcome}  {r.id} ({r.mode})")
             for v in r.violations:
                 print(f"        - {v}")
         for e in r.exemptions:
@@ -535,6 +696,9 @@ def main(argv: list[str] | None = None) -> int:
         f"{len(failed)} fail, {len(warned)} warn.",
         file=sys.stderr,
     )
+
+    if any(r.mode_note == "predates check" and not r.ok for r in reports):
+        print(f"\n{PREDATES_CHECK_HINT}", file=sys.stderr)
 
     if failed:
         print(

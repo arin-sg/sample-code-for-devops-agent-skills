@@ -14,6 +14,13 @@ name: Validate skill evals
 # every PR touching one into a blocker — a lever for forcing that migration rather
 # than a cleanup step to apply afterwards.
 #
+# Pull requests already open when this check was introduced are listed by number in
+# the script, so every skill they touch only warns. Applying the `enforce-evals`
+# label to a PR reverses that and enforces every skill it touches, whatever the
+# derived mode — a per-PR form of --strict, and the way a maintainer holds one of
+# those pull requests to the requirement after all. Only users with triage or write
+# access can label, so a contributor cannot use it to unblock themselves.
+#
 # A companion workflow (label-skill-evals-result.yml) applies or removes the
 # `needs-evals` label based on this job's outcome. It has to be a separate
 # workflow_run job because GITHUB_TOKEN is read-only for pull_request events from
@@ -25,14 +32,16 @@ name: Validate skill evals
 
 on:
   pull_request:
-    # `labeled` is included so a maintainer can force a run on an already-open PR
-    # by adding any label — useful for PRs opened before this workflow existed,
-    # which otherwise report no status at all and sit blocked without a log.
+    # `labeled` is included for two reasons. It lets a maintainer force a run on an
+    # already-open PR by adding any label — useful for PRs opened before this
+    # workflow existed, which otherwise report no status at all and sit blocked
+    # without a log. And it makes `enforce-evals` take effect the moment it is
+    # applied, with no push needed from the author.
     #
-    # Use a label other than `needs-evals` when doing this deliberately: the
-    # companion workflow applies `needs-evals` itself, so adding it by hand makes
-    # its own behavior unobservable. Note also that a label applied by GITHUB_TOKEN
-    # raises no `labeled` event, so the companion workflow cannot re-trigger this one.
+    # Use a label other than `needs-evals` when only forcing a run: the companion
+    # workflow applies `needs-evals` itself, so adding it by hand makes its own
+    # behavior unobservable. Note also that a label applied by GITHUB_TOKEN raises
+    # no `labeled` event, so the companion workflow cannot re-trigger this one.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     # Deliberately NOT filtered with `paths: skills/**`. A required status check
     # that never runs is reported as pending forever, so a path filter here would
@@ -59,8 +68,10 @@ jobs:
     runs-on: ubuntu-latest
     # No `if:` guard here on purpose. Skipping this job would report the required
     # check as "skipped", which branch protection can treat as satisfied — so a
-    # guard keyed on the label would let anyone unblock a failing PR by labeling
-    # it. The cost is one redundant run when the companion workflow applies
+    # guard keyed on a label would let anyone unblock a failing PR by labeling
+    # it. Labels are read by the script instead, where they can only make the check
+    # stricter and the job still reports a real status.
+    # The cost is one redundant run when the companion workflow applies
     # `needs-evals`; that run cannot cascade, because re-adding a label a PR
     # already has emits no new `labeled` event.
     steps:
@@ -80,10 +91,15 @@ jobs:
         # labeling workflow, and only then turned into a job failure. Without this
         # the artifact would not be uploaded on failure — the case that needs a label.
         continue-on-error: true
-        # The base ref is passed through the environment rather than interpolated
-        # into the command, and quoted on use.
+        # Every value from the event payload is passed through the environment
+        # rather than interpolated into the command, and quoted on use. Label names
+        # in particular are attacker-controllable in principle.
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # JSON array of label names. The script reads one of them,
+          # `enforce-evals`, as a per-PR instruction to enforce every touched skill.
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           # Make sure the base branch is available locally as a remote-tracking ref
           # so the merge base can be computed.
@@ -93,7 +109,9 @@ jobs:
           set +e
           python3 .github/scripts/validate_skill_evals.py \
             --base-ref "origin/${BASE_REF}" \
-            --head-ref HEAD
+            --head-ref HEAD \
+            --pr-number "${PR_NUMBER}" \
+            --labels "${PR_LABELS}"
           code=$?
           set -e
           echo "code=${code}" >> "$GITHUB_OUTPUT"

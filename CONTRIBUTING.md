@@ -126,7 +126,7 @@ That text comes from `.github/scripts/validate_skill_evals.py`, the script the w
 python3 .github/scripts/validate_skill_evals.py --skill <your-skill-name>
 ```
 
-A failing check also puts a `needs-evals` label on the PR, which is removed automatically once the check passes.
+A failing check also puts a `needs-evals` label on the PR, which is removed automatically once the check passes. That label is written only by automation and only reflects the last result — it isn't something to add or remove by hand.
 
 ##### When a test type can't be run
 
@@ -160,6 +160,16 @@ The check is rolling out gradually, so whether a violation fails the check or is
 | Exists on `main` on the older flat `evals/` layout, and your PR leaves it there | Reported as a warning; the check passes |
 
 So new skills need eval results, and existing skills are only held to that once someone migrates them. Migrating one is welcome in any PR — but finish it, or use an exemption for the part you can't produce. Landing half a migration and leaving the rest would fail the next person to touch that skill, for something they didn't do, which is why the third row exists.
+
+##### Pull requests opened before this check existed
+
+Pull requests that were already open when this check was introduced are listed by number in `PRS_PREDATING_CHECK`, in the script. Their authors tested their skills against the rules that applied when they contributed, so the check reports warnings for them and passes, even for a skill the PR adds. If yours is one of them, you don't have to produce eval results to merge — though they're welcome, and the warnings in the check's summary show what's missing.
+
+Two things are outside that, because they aren't about producing results you were never asked for. A skill that already carries eval results on `main` still can't lose them, and a PR that ships *part* of the new layout still has to finish it or exempt the rest — the same rule as the third row of the table above, for the same reason.
+
+A maintainer can still hold one of these pull requests to the full requirement, by adding the `enforce-evals` label to it. That makes every skill the PR touches enforced, the same as for a new skill, and it applies to any pull request rather than only the listed ones. Adding it re-runs the check straight away. It stays on the PR once applied, so the requirement doesn't lapse on the next push — which is why it's a separate label from `needs-evals`, the one automation clears whenever the check passes.
+
+The list is a one-off for the transition and shrinks as those pull requests close. It'll be deleted once they're all closed.
 
 #### Keeping a Skill Fresh
 
