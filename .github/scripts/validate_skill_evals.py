@@ -127,9 +127,22 @@ MIGRATED_MARKERS = ("evals/structure", "evals/best-practices", "evals/functional
 #
 # The list is finite and stops mattering as these PRs close; a number that is no
 # longer open is simply never matched. Delete the list and ``--pr-number`` once all
-# of them are closed. Derived on 2026-09-19 from the open PRs touching skills/.
+# of them are closed.
+#
+# Re-derive it immediately before merging, since a PR opened in the meantime is also
+# one whose author could not have known about this check:
+#
+#   for n in $(gh pr list --state open --limit 100 --json number --jq '.[].number'); do
+#     gh pr diff "$n" --name-only | awk -F/ -v n="$n" '$1=="skills" && NF>=3 {print n; exit}'
+#   done | sort -n | paste -sd, -
+#
+# Last derived 2026-09-20.
 PRS_PREDATING_CHECK = frozenset(
-    {20, 25, 26, 38, 42, 54, 56, 58, 62, 67, 71, 72, 77, 78, 81, 85, 89, 90, 91, 93}
+    {
+        20, 25, 26, 38, 42, 54, 56, 58, 62, 67,
+        71, 72, 77, 78, 81, 85, 89, 90, 91, 93,
+        94, 96,
+    }
 )
 
 # Label that forces enforcement on every skill a pull request touches, whatever the
