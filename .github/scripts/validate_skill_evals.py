@@ -133,15 +133,27 @@ MIGRATED_MARKERS = ("evals/structure", "evals/best-practices", "evals/functional
 # one whose author could not have known about this check:
 #
 #   for n in $(gh pr list --state open --limit 100 --json number --jq '.[].number'); do
-#     gh pr diff "$n" --name-only | awk -F/ -v n="$n" '$1=="skills" && NF>=3 {print n; exit}'
+#     gh api "repos/aws/tools-for-devops-agent/pulls/$n/files" --paginate --jq '.[].filename' \
+#       | awk -F/ -v n="$n" '$1=="skills" && NF>=3 {print n; exit}'
 #   done | sort -n | paste -sd, -
 #
-# Last derived 2026-09-20.
+# Use the files endpoint, not ``gh pr diff --name-only``: that fails with HTTP 406 on a
+# diff over 20,000 lines *and still exits 0*, so a large PR is skipped without a word.
+# A skill PR shipping a full eval tree is exactly the kind that trips it — #97 has 256
+# files and was missed this way on the first pass.
+#
+# Entries are included on the factual test (open, touches a skill directory), not on
+# whether being listed changes that PR's outcome. A PR already shipping the new layout
+# is enforced regardless, since ``now_migrated`` overrides this list, so its entry does
+# nothing today — but it starts mattering if that PR is restructured before merge, and
+# judging entries by outcome is what makes the list wrong later.
+#
+# Last derived 2026-09-21.
 PRS_PREDATING_CHECK = frozenset(
     {
         20, 25, 26, 38, 42, 54, 56, 58, 62, 67,
         71, 72, 77, 78, 81, 85, 89, 90, 91, 93,
-        94, 96,
+        94, 96, 97, 98, 99,
     }
 )
 
