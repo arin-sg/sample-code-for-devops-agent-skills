@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3] - 2026-09-21
+### Changed
+- `SKILL.md`: set `metadata.author` to a resolvable GitHub login (`midakin`) so the generated docs-catalog profile link points to a valid account.
+### Added
+- Root `llms.txt` catalog entry for the skill.
+- `.skilleval.yaml` pinning the intentional `STR-016` audit info finding (README alongside SKILL.md).
+
 ## [1.2.2] - 2026-09-10
 ### Changed
 - `references/tgw-routing-patterns.md`: clarified that the VPN-preferred-over-DX behavior applies specifically to a **static** VPN (dynamic VPN behaves differently).
